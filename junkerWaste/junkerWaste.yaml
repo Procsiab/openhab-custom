@@ -1,0 +1,255 @@
+uid: procsiab:junkerWaste
+label: Junker waste collection for Italy
+description: Get the dates of the next scheduled collections of several waste categories, related to Italy.
+configDescriptions:
+  - name: refreshTime
+    type: TEXT
+    label: Daily refresh time
+    context: time
+    required: true
+    description: Schedule the daily items refresh by running this rule at the specified time. You may want to adjust this to be prior to the exhibit time for your area.
+    defaultValue: 19:00:00
+  - name: municipalityName
+    type: TEXT
+    label: Municipality name
+    required: true
+    description: String representing the name of the municipality to monitor the collection schedule; must be valid on the Junker platform
+  - name: areaCode
+    type: INTEGER
+    label: Area code
+    required: true
+    description: Number representing the code of the area to monitor the collection schedule; must be valid on the Junker platform
+  - name: organicDateItem
+    type: TEXT
+    label: Organic waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next organic waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+  - name: paperDateItem
+    type: TEXT
+    label: Paper waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next clean paper waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+  - name: generalDateItem
+    type: TEXT
+    label: General waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next general waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+  - name: plasticDateItem
+    type: TEXT
+    label: Plastic and metal waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next plastic+metal waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+  - name: glassDateItem
+    type: TEXT
+    label: Glass waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next glass waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+  - name: diapersDateItem
+    type: TEXT
+    label: Diapers waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next diapers waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
+triggers:
+  - id: "2"
+    configuration:
+      time: "{{refreshTime}}"
+    type: timer.TimeOfDayTrigger
+conditions: []
+actions:
+  - inputs: {}
+    id: "1"
+    configuration:
+      type: application/javascript
+      script: >-
+        var logger = log("junkercollectschedule");
+
+        /**
+         * Mapping of waste categories to corresponding translated strings and item names
+         */
+        var categoryDict = {
+          organic: {description: "Umido", itemName: "{{organicDateItem}}"},
+          paper: {description: "Carta pulita", itemName: "{{paperDateItem}}"},
+          general: {description: "Secco misto", itemName: "{{generalDateItem}}"},
+          plastic: {description: "Plastica e metallo", itemName: "{{plasticDateItem}}"},
+          glass: {description: "Vetro", itemName: "{{glassDateItem}}"},
+          napkins: {description: "Pannolini", itemName: "{{diapersDateItem}}"},
+        };
+
+        /**
+         * Fetches waste collection schedule for a given municipality and area.
+         * @param {string} municipality - Name of the municipality
+         * @param {string} area - Name of the area (optional)
+         * @returns {Promise<Object[]>} - List of collection events
+         * @throws {Error} - If data is not found or request fails
+         */
+        var fetchCollectionSchedule = async (municipality, area) => {
+
+          /**
+           * Removes accents from a given text string.
+           * @param {string} text - Input text
+           * @returns {string} - Normalized text without accents
+           */
+          const replaceAccents = (text) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "").normalize("NFC");
+
+          let areaName = area;
+          let municipalityUrl = `https://differenziata.junkerapp.it/${municipality}/calendario`;
+          let municipalityAreaUrl = `https://differenziata.junkerapp.it/${municipality}/${area}/calendario`;
+
+          let normalizedMunicipality = replaceAccents(municipality.toLowerCase().trim().replace(/[' ]/g, "-"));
+          let url = area ? municipalityAreaUrl : municipalityUrl;
+
+          try {
+            let HTTP = Java.type("org.openhab.core.model.script.actions.HTTP");
+            let data = HTTP.sendHttpGetRequest(url);
+
+            // Extract zones if present
+            let zoneMatch = data.match(/var\s+zone\s*=\s*(\[.*?\])\s*;/);
+            if (zoneMatch) {
+              let zones = JSON.parse(zoneMatch[1]);
+              let areas = zones.map(zone => [zone.NOME, zone.ID]);
+              if (!areas.length) throw new Error("No areas found");
+
+              if (areaName) {
+                for (let areaItem of areas) {
+                  if (replaceAccents(areaItem[0]).toLowerCase().replace(/[,\s']/g, "") === replaceAccents(areaName).toLowerCase().replace(/[,\s']/g, "")) {
+                    if (area === String(areaItem[1]) || area === areaItem[1]) {
+                      throw new Error("Something went wrong with the area parsing");
+                    }
+                    area = areaItem[1];
+                    return fetchCollectionSchedule(municipality, area);
+                  }
+                }
+                throw new Error("Area not found");
+              }
+              throw new Error("Area required");
+            }
+
+            // Extract collection events
+            let eventsMatch = data.match(/var\s+events\s*=\s*(\[.*?\])\s*;/);
+            if (!eventsMatch) throw new Error("No events found, maybe the municipality is wrong or not supported");
+
+            let events = JSON.parse(eventsMatch[1]);
+            return events;
+
+          } catch (error) {
+            if (error.message != "No collections found") {
+              logger.error(error.message);
+              throw new Error("Failed to fetch collection data");
+            }
+          }
+        };
+
+        /**
+         * Filter waste collection events for a given date.
+         * @param {string} collectDate - Collection date in YYYY-MM-DD format
+         * @param {<Object[]>} events - List of collection events, as returned by fetchCollectionSchedule
+         * @param {string} municipality - Name of the municipality
+         * @param {string} area - Name of the area (optional)
+         * @returns {Promise<Object[]>} - List of collection events, filtered
+         * @throws {Error} - If data is not found
+         */
+        var filterByDate = (events, collectDate, municipality, area) => {
+          let collectionEvents = [];
+          let targetDate = new Date(collectDate);
+
+          for (let event of events) {
+            let date = new Date(event.date);
+            if (date.toISOString().split('T')[0] === targetDate.toISOString().split('T')[0]) {
+              let binType = event.vbin_desc.toLowerCase().split(" ")[0];
+              collectionEvents.push({ type: binType });
+            }
+          }
+
+          if (!collectionEvents.length) {
+            let municipalityAreaMap = { municipality, area };
+            let matchingMunicipalities = Object.keys(municipalityAreaMap).filter(m => m.toLowerCase().replace(/\s/g, "") === municipality.toLowerCase().replace(/\s/g, ""));
+            let matchedMunicipality = matchingMunicipalities.length ? matchingMunicipalities[0] : municipality;
+            if (!area && matchedMunicipality in municipalityAreaMap && municipalityAreaMap[matchedMunicipality].length === 1) {
+              area = municipalityAreaMap[municipality][0];
+              return filterByDate(events, collectDate, municipality, area);
+            }
+            throw new Error("No collections found");
+          }
+          return collectionEvents;
+        };
+
+        // Call the API request function and try to update all items within the fetch timespan
+
+        (async () => {
+          const municipality = "{{municipalityName}}";
+          const area = "{{areaCode}}";
+
+          // Clear all the DateTime items
+          Object.entries(categoryDict).forEach(([category, properties]) => {
+            items.getItem(properties.itemName).postUpdate("NULL");
+          });
+
+          let scheduleList = [];
+          // Download all the available schedule
+          let allCollectionEvents = await fetchCollectionSchedule(municipality, area);
+
+          // Fetch the schedule for the next week, starting from tomorrow
+          for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
+
+            // Set the collection date by using the format and offset provided
+            let collectDate = time.DateTimeFormatter.ofPattern("yyyy-MM-dd").format(time.ZonedDateTime.now().plusDays(dayOffset));
+            try {
+              let collectionSchedule = filterByDate(allCollectionEvents, collectDate, municipality, area);
+
+              if (Array.isArray(collectionSchedule) && collectionSchedule.length > 0) {
+                logger.debug(`Collections on ${collectDate}:`);
+                collectionSchedule.forEach((collection, index) => {
+                  logger.debug(`(${index + 1}) Type: ${collection.type}`);
+                  // Check that the schedule list does not have any element for the current type
+                  if (!scheduleList.some(entry => entry.type === collection.type)) {
+                    scheduleList.push({ type: collection.type, date: collectDate });
+                  }
+                });
+              }
+            } catch (error) {
+              if (error.message == "No collections found") {
+                logger.debug(`No waste collections scheduled for ${collectDate}`);
+              } else {
+                logger.error("Error:", error.message);
+              }
+            }
+          }
+          // Update all the DateTime items
+          Object.entries(categoryDict).forEach(([category, properties]) => {
+            let date = scheduleList
+              .filter(entry => entry.type === category) // Find matching objects
+              .map(entry => entry.date); // Extract dates
+            items.getItem(properties.itemName).postUpdate(date);
+          });
+        })();
+    type: script.ScriptAction
