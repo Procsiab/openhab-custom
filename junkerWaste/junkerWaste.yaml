@@ -79,6 +79,16 @@ configDescriptions:
     filterCriteria:
       - name: type
         value: DateTime
+  - name: grassDateItem
+    type: TEXT
+    label: Grass clippings waste Item
+    context: item
+    required: true
+    defaultValue: ""
+    description: Item to update with the next grass clippings waste collection date
+    filterCriteria:
+      - name: type
+        value: DateTime
 triggers:
   - id: "2"
     configuration:
@@ -95,6 +105,7 @@ actions:
 
         /**
          * Mapping of waste categories to corresponding translated strings and item names
+         * NOTE: the key name must be the first lowercase word of the collection category returned by the web app
          */
         var categoryDict = {
           organic: {description: "Umido", itemName: "{{organicDateItem}}"},
@@ -103,6 +114,7 @@ actions:
           plastic: {description: "Plastica e metallo", itemName: "{{plasticDateItem}}"},
           glass: {description: "Vetro", itemName: "{{glassDateItem}}"},
           napkins: {description: "Pannolini", itemName: "{{diapersDateItem}}"},
+          grass: {description: "Sfalci e Potature", itemName: "waste_collect_schedule_grass"},
         };
 
         /**
