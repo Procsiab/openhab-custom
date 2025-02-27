@@ -231,7 +231,7 @@ actions:
           let allCollectionEvents = await fetchCollectionSchedule(municipality, area);
 
           // Fetch the schedule for the next week, starting from tomorrow
-          for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
+          for (let dayOffset = 1; dayOffset <= 15; dayOffset++) {
 
             // Set the collection date by using the format and offset provided
             let collectDate = time.DateTimeFormatter.ofPattern("yyyy-MM-dd").format(time.ZonedDateTime.now().plusDays(dayOffset));
